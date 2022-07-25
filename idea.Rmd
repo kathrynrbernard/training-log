@@ -1,0 +1,14 @@
+---
+title: "Project Idea"
+author: "Kathryn Bernard"
+date: '2022-07-18'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+I plan to investigate some factors associated with average running mile pace. These factors include the temperature outside, the distance run, the time of day that the run took place, the day of the week that the run took place, perceived exertion, and the number of other runners present (whether it was a group run or solo run). I might also include biological factors like hours of sleep the night prior to the run and stress levels on the day of the run.
+
+I will use my personal running data collected on a workout tracking app called Strava and my sleep and stress data collected by my Garmin watch.

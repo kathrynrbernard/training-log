@@ -1,0 +1,135 @@
+---
+title: "Project Data"
+author: "Kathryn Bernard"
+date: '2022-07-23'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Setup
+### Load packages
+```{r, message=FALSE}
+library(httr) # for pulling the Strava data
+library(rStrava) # for formatting the Strava data
+library(tidyverse)
+```
+
+## Strava Data
+### Pull data from Strava
+``` {r}
+# Strava app setup
+# Run once, then comment out (it doesn't work in the knitted Rmd file because it requires authentication
+# in a browser window to finish pulling the data from the Strava website)
+#client_id <- 80261
+#secret <- "****" # fill in as needed
+#app_name <- "Training_Analysis"
+# launches a browser window where you have to manually authenticate the app
+#stoken <- httr::config(token = strava_oauth(app_name, client_id, secret, app_scope="activity:read_all"))
+
+# extract data
+#my_acts <- get_activity_list(stoken)
+#df <- compile_activities(my_acts)
+
+# save as a csv to read in the knitted version of the file
+#write.csv(df,"strava.csv") 
+
+df <- read.csv("strava.csv")
+
+# drop unneeded columns
+drop <- names(df) %in% c("athlete.id", "athlete.resource_state", "commute",
+                         "display_hide_heartrate_option", "flagged", "from_accepted_tag", "has_heartrate", "has_kudoed",
+                         "heartrate_opt_out", "manual", "map.id", "map.resource_state",
+                         "photo_count", "private", "resource_state",
+                         "start_date_local", "timezone", "total_photo_count", "trainer",
+                         "utc_offset", "visibility", "average_watts", "device_watts",
+                         "end_latlng1", "end_latlng2", "external_id", "gear_id", "kilojoules",
+                         "map.summary_polyline", "start_latlng1", "start_latlng2", "upload_id", "upload_id_str",
+                         "type", "workout_type"
+                         )
+df <- df[!drop]
+
+# filter to only running activities
+runs <- df %>% filter(sport_type=="Run")
+
+# get number of observations
+nrow(runs)
+```
+
+### Convert units and datatypes as needed
+```{r, warning=FALSE}
+# adjust datatypes to numeric 
+runs <- runs %>% mutate_at(c("average_cadence", "average_heartrate", "average_temp", "average_speed", "max_heartrate", "pr_count", "suffer_score"), as.numeric, na.rm=TRUE)
+
+# convert units
+runs <- runs %>% mutate(distance_miles=distance/1.609, # distance is originally in km; convert to miles
+                        temp_f=average_temp*9/5 +32, # temp is originally in C; convert to F
+                        elapsed_time_min=elapsed_time/60, # time is originally in seconds; convert to minutes
+                        moving_time_min=moving_time/60,
+                        average_speed_mpm=round(96.56064/average_speed,2), # speed is in km/hour, we want miles/min
+                        max_speed_mpm=round(96.56064/max_speed,2),
+                        total_elev_gain_ft=total_elevation_gain*3.281, # elevation is in meters, we want feet
+                        elev_high_ft=elev_high*3.281,
+                        elev_low_ft=elev_low*3.281
+                        )
+# split out minutes and hours into a more typical running pace format, for readability
+runs <- runs %>% separate(average_speed_mpm, into=c("average_speed_mins", "average_speed_secs"), remove=FALSE)
+runs <- runs %>% separate(max_speed_mpm, into=c("max_speed_mins", "max_speed_secs"), remove=FALSE)
+runs <- runs %>% mutate(average_speed_mins=as.numeric(average_speed_mins),
+                        max_speed_mins=as.numeric(max_speed_mins),
+                        max_speed_secs=as.numeric(formatC(round(as.numeric(max_speed_secs)/100*60,2),width=2,format="d",flag="0")),
+                        average_speed_secs=as.numeric(formatC(round(as.numeric(average_speed_secs)/100*60,2),width=2,format="d",flag="0")))
+```
+
+### Summarize variables of interest
+```{r, warning=FALSE}
+# define a subset of variables that will potentially be used in the final analysis
+summary <- c("achievement_count", "athlete_count", "average_cadence", "average_heartrate", "max_heartrate", "suffer_score",
+             "total_elev_gain_ft", "distance_miles", "temp_f", "elapsed_time_min", "moving_time_min", "average_speed_mpm", "max_speed_mpm")
+
+# get summary statistics for each
+summary(runs[,summary])
+```
+
+
+## Garmin Data
+### Read in Garmin data (downloaded manually from Garmin connect)
+Note - I'm still waiting for a full data export from Garmin, so this is just a prototype based on weekly aggregated data that's available for immediate download. The final data will be different.
+```{r, warning=FALSE, message=FALSE}
+calories <- read.csv("Garmin_Calories.csv")
+rhr <- read.csv("Garmin_RestingHeartRate.csv")
+sleep <- read.csv("Garmin_Sleep.csv")
+stress <- read.csv("Garmin_Stress.csv")
+
+# combine into one dataframe based on date
+calories <- calories %>% filter(!row_number()==7) # remove Aug 9 (only present in calories and not other dataframes)
+
+require(plyr)
+garmin <- join_all(list(calories,rhr,sleep,stress),by="X",type="full") # create one larger dataframe joined on column X (date)
+```
+
+### Convert units and datatypes as needed
+```{r, warning=FALSE}
+# sleep column is a character, want to split out into numbers for hours/minutes
+garmin <- garmin %>% separate(col=Sleep, into=c("Sleep.Hours","Sleep.Minutes")) # this gives a warning about discarding missing pieces but it's fine 
+# the piece that is discarded is the "hrs" unit that's added to the end of each measurement, which we don't want anyway
+
+# rename total calories column to be more clear
+garmin <- garmin %>% dplyr::rename(Total.Calories=Total)
+
+garmin <- garmin %>% mutate(Sleep.Hours=as.numeric(Sleep.Hours),
+                            Sleep.Minutes=as.numeric(Sleep.Minutes),
+                            Total.Sleep=round(((Sleep.Hours*60)+Sleep.Minutes)/60,2))
+```
+
+### Summarize variables of interest
+```{r, warning=FALSE}
+# define a subset of variables that will potentially be used in the final analysis
+summary <- c("Active.Calories", "Resting.Calories", "Total.Calories", "Resting.Heart.Rate", "Stress", "Total.Sleep")
+summary(garmin[,summary])
+```
+
+
+ 
