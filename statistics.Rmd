@@ -1,0 +1,322 @@
+---
+title: "Project Data"
+author: "Kathryn Bernard"
+date: '2022-07-23'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Overview
+The goal of this project is to create a multiple linear regression model exploring the effects of several variables on running pace. These variables are: distance, temperature, heartrate during the run, hours of sleep the night before, and Strava's calculated "suffer score" for the activity (essentially a perceived exertion score).
+
+This project also includes descriptive statistics for all the variables of interest, and a deeper exploration into the temperature variable.
+
+## Setup
+### Load packages
+```{r, message=FALSE}
+library(tidyverse)
+library(RColorBrewer)
+```
+
+## Strava Data
+``` {r}
+strava <- read.csv("data/strava.csv")
+
+# drop unneeded columns
+drop <- names(strava) %in% c("athlete.id", "athlete.resource_state", "commute",
+                         "display_hide_heartrate_option", "flagged", "from_accepted_tag", "has_heartrate", "has_kudoed",
+                         "heartrate_opt_out", "manual", "map.id", "map.resource_state",
+                         "photo_count", "private", "resource_state",
+                         "start_date_local", "timezone", "total_photo_count", "trainer",
+                         "utc_offset", "visibility", "average_watts", "device_watts",
+                         "end_latlng1", "end_latlng2", "external_id", "gear_id", "kilojoules",
+                         "map.summary_polyline", "start_latlng1", "start_latlng2", "upload_id", "upload_id_str",
+                         "type", "workout_type"
+                         )
+strava <- strava[!drop]
+
+# filter to only running activities
+runs <- strava %>% filter(sport_type=="Run")
+
+# get number of observations
+nrow(runs)
+```
+
+### Convert units and datatypes as needed
+```{r, warning=FALSE}
+# adjust datatypes to numeric 
+runs <- runs %>% mutate_at(c("average_cadence", "average_heartrate", "average_temp", "average_speed", "max_heartrate", "pr_count", "suffer_score"), as.numeric, na.rm=TRUE)
+
+# convert units
+runs <- runs %>% mutate(distance_miles=distance/1.609, # distance is originally in km; convert to miles
+                        temp_f=average_temp*9/5 +32, # temp is originally in C; convert to F
+                        elapsed_time_min=elapsed_time/60, # time is originally in seconds; convert to minutes
+                        moving_time_min=moving_time/60,
+                        average_speed_mpm=round(96.56064/average_speed,2), # speed is in km/hour, we want miles/min
+                        max_speed_mpm=round(96.56064/max_speed,2),
+                        total_elev_gain_ft=total_elevation_gain*3.281, # elevation is in meters, we want feet
+                        elev_high_ft=elev_high*3.281,
+                        elev_low_ft=elev_low*3.281
+                        )
+# split out minutes and hours into a more typical running pace format, for readability
+runs <- runs %>% separate(average_speed_mpm, into=c("average_speed_mins", "average_speed_secs"), remove=FALSE)
+runs <- runs %>% separate(max_speed_mpm, into=c("max_speed_mins", "max_speed_secs"), remove=FALSE)
+runs <- runs %>% mutate(average_speed_mins=as.numeric(average_speed_mins),
+                        max_speed_mins=as.numeric(max_speed_mins),
+                        max_speed_secs=as.numeric(formatC(round(as.numeric(max_speed_secs)/100*60,2),width=2,format="d",flag="0")),
+                        average_speed_secs=as.numeric(formatC(round(as.numeric(average_speed_secs)/100*60,2),width=2,format="d",flag="0")))
+```
+
+## Garmin Data
+```{r, warning=FALSE, message=FALSE}
+sleep <- read.csv("data/sleep/2021-06-23_2021-10-01_97013065_sleepData.csv")
+sleep <- rbind(sleep, read.csv("data/sleep/2021-10-01_2022-01-09_97013065_sleepData.csv"))
+sleep <- rbind(sleep, read.csv("data/sleep/2022-01-09_2022-04-19_97013065_sleepData.csv"))
+sleep <- rbind(sleep, read.csv("data/sleep/2022-04-19_2022-07-28_97013065_sleepData.csv"))
+
+drop <- names(sleep) %in% c("sleepWindowConfirmationType", "retro")
+sleep <- sleep[!drop]
+```
+
+### Data Manipulation
+```{r}
+sleep <- sleep %>% 
+  mutate(totalSleepHours=(sleep$deepSleepSeconds + sleep$lightSleepSeconds + sleep$remSleepSeconds + sleep$unmeasurableSeconds)/60/60)
+```
+
+## Combine Garmin and Strava
+```{r}
+runs$calendarDate <- as.Date(runs$start_date) # get just the date (not time) of the run
+sleep$calendarDate <- as.Date(sleep$calendarDate) # convert to Date datatype
+
+# join sleep data to run dataframe
+runs <- runs %>% left_join(sleep, by="calendarDate")
+```
+
+## Summary Stats
+Let's get a basic understanding of the variables we'll be using in the models.
+```{r, message=FALSE, warning=FALSE}
+# create nicer titles for each facet
+var_names <- c(`average_heartrate` = c(paste("Heartrate\nMean: ", round(mean(runs$average_heartrate,na.rm=TRUE),2))),
+               `distance_miles` = c(paste("Distance (Miles)\nMean: ", round(mean(runs$distance_miles,na.rm=TRUE),2))), 
+               `suffer_score` = c(paste("Suffer Score\nMean: ", round(mean(runs$suffer_score,na.rm=TRUE),2))),
+               `temp_f` = c(paste("Temperature (F)\nMean: ", round(mean(runs$temp_f,na.rm=TRUE),2))),
+               `totalSleepHours` = c(paste("Previous Night's Sleep (Hours)\nMean: ", round(mean(runs$totalSleepHours,na.rm=TRUE),2))))
+
+runs %>% 
+  select(c("average_speed_mpm","distance_miles", "suffer_score", "average_heartrate", "temp_f", "totalSleepHours")) %>% 
+  pivot_longer(!average_speed_mpm,names_to="Variable",values_to="Value") %>% 
+  ggplot(aes(x=Value,fill=Variable)) + 
+  geom_histogram() +
+  scale_fill_manual(values=brewer.pal(n=5,name="Set1")) +
+  facet_wrap(~Variable, scales="free", labeller = as_labeller(var_names)) +
+  labs(title="Distribution of Each Model Factor", y="Count") +
+  theme_minimal() +
+  theme(legend.position="none")
+```
+
+
+## Models: Predicting Average Pace
+### Strava Data Only
+Let's start by investigating the effect of "within-run" factors on pace. The variables we'll use are distance, "suffer score", heartrate, and temperature.
+```{r, warning=FALSE}
+model_all <- lm(average_speed_mpm ~ distance_miles + suffer_score + average_heartrate + temp_f, data=runs)
+summary(model_all)
+qqnorm(residuals(model_all))
+
+# find influential points
+cooksd <- cooks.distance(model_all)
+plot(cooks.distance(model_all))
+influential <- as.numeric(names(cooksd)[(cooksd > 4/nrow(runs))])
+
+# remove the points above the cooks d cutoff
+runs <- runs[-influential,]
+
+# re-run the model
+model_all <- lm(average_speed_mpm ~ distance_miles + suffer_score + average_heartrate + temp_f, data=runs)
+summary(model_all)
+```
+
+The important thing to keep in mind when interpreting the output of the model is that a higher number for pace means a slower pace (an 11 minute mile is slower than an 8 minute mile).
+
+Distance: Distance is not a significant predictor in this model, with p = 0.653. It is weakly associated with pace in a negative direction - longer runs tend to have a lower (faster) pace, which is interesting and slightly unexpected.
+
+Suffer score: Suffer score is not a significant predictor in this model, with p = 0.185. It is weakly associated with pace in a positive direction - higher suffer scores are associated with higher numbers for pace (slower runs).
+
+Heartrate: Heartrate is a significant predictor of pace with p = 0.001. It is associated with pace in a negative direction - higher heartrates are associated with lower (faster) paces.
+
+Temperature: Temperature is the strongest predictor in the model, with p < 0.001. As temperature increases, running pace also increases (i.e., when it is hotter, I tend to run slower).
+
+#### Check Assumptions
+```{r}
+# plot residuals vs fitted values
+plot(x=fitted.values(model_all), y=residuals(model_all))
+
+# qq plot of residuals
+qqnorm(residuals(model_all))
+
+# plot residuals in order
+plot(residuals(model_all))
+
+```
+
+
+Because temperature was such a strong predictor in the first model, I wanted to know what would happen if I removed it from a subsequent model - maybe its presence overshadowed some smaller but still meaningful effects of other variables.
+```{r}
+model_no_temp <- lm(average_speed_mpm ~ distance_miles + suffer_score + average_heartrate, data=runs)
+summary(model_no_temp)
+```
+
+With temperature removed from the model, other variables became significant predictors.
+
+Distance: Distance is not a significant predictor in this model, with p = 0.106. It is weakly associated with pace in a negative direction - longer distances are associated with lower (faster) paces.
+
+Suffer score: Suffer score is also not a significant predictor in this model, with p = 0.059. It is associated with pace in a positive direction - higher suffer scores are associated with higher numbers for pace (slower runs).
+
+Heartreate: Heartrate is no longer a significant predictor of pace in this model, with p = 0.084. It is associated with pace in a negative direction - higher heartrates are associated with lower (faster) paces.
+
+#### Check Assumptions
+```{r}
+# plot residuals vs fitted values
+plot(x=fitted.values(model_no_temp), y=residuals(model_no_temp))
+
+# qq plot of residuals
+qqnorm(residuals(model_no_temp))
+
+# plot residuals in order
+plot(residuals(model_no_temp))
+```
+
+
+
+
+Now that we have two models, we need to compare them to see which model explains more variance in the data while using the fewest predictors.
+```{r}
+AIC(model_all,model_no_temp)
+```
+
+The model with temperature included has a lower AIC score, which means it does a better job of explaining our data, even though it has one more predictor. This is the model we will use going forward.
+
+
+### Include Garmin Data
+Now let's see if including biological data (sleep) adds any value.
+```{r}
+model_sleep <- lm(average_speed_mpm ~ distance_miles + suffer_score + average_heartrate + temp_f + totalSleepHours, data=runs)
+
+summary(model_sleep)
+```
+Distance: Distance is not a significant predictor in this model, with p = 0.652. It is weakly associated with pace in a positive direction - longer runs tend to have a higher (slower) pace.
+
+Suffer score: Suffer score is not a significant predictor in this model, with p = 0.182. It is weakly associated with pace in a positive direction - higher suffer scores are associated with higher numbers for pace (slower runs).
+
+Heartrate: Heartrate is a significant predictor of pace with p = 0.001. It is associated with pace in a negative direction - higher heartrates are associated with lower (faster) paces.
+
+Temperature: Temperature is the strongest predictor in the model, with p < 0.001. As temperature increases, running pace also increases (i.e., when it is hotter, I tend to run slower).
+
+Sleep: Hours of sleep the night before a run is not a significant predictor, with p = 0.651. It is weakly associated with pace in a negative direction - getting more sleep is associated with lower (faster) pace.
+
+#### Check Assumptions
+```{r}
+# plot residuals vs fitted values
+plot(x=fitted.values(model_sleep), y=residuals(model_sleep))
+
+# qq plot of residuals
+qqnorm(residuals(model_sleep))
+
+# plot residuals in order
+plot(residuals(model_sleep))
+```
+
+
+Let's compare the model with sleep to the model without sleep.
+```{r}
+AIC(model_all,model_sleep)
+```
+The AIC scores are very similar. The model that does not include sleep has a slightly lower score, which means it does a bit better job of explaining our data. This is the model we will visualize.
+
+## Visualize the Model
+```{r, warning=FALSE, message=FALSE}
+var_names <- c(`average_heartrate` = "Heartrate",
+               `distance_miles` = "Distance (Miles)", 
+               `suffer_score` = "Suffer Score",
+               `temp_f` = "Temperature (F)")
+
+
+runs %>% 
+  select(c("average_speed_mpm","distance_miles", "suffer_score", "average_heartrate", "temp_f")) %>% 
+  pivot_longer(!average_speed_mpm,names_to="Variable",values_to="Value") %>% 
+  ggplot(aes(x=Value,y=average_speed_mpm,color=Variable)) + 
+  geom_jitter(alpha=.5) +
+  geom_smooth(aes(fill=Variable), alpha=.2, method=lm) +
+  scale_color_manual(values=brewer.pal(n=4,name="Set1")) +
+  scale_fill_manual(values=brewer.pal(n=4,name="Set1")) +
+  facet_wrap(~Variable, scales="free_x", labeller = as_labeller(var_names)) +
+  labs(title="Relationship of Each Model Factor with Running Pace", y="Pace (Miles per Minute)") +
+  theme_minimal() +
+  theme(legend.position="none")
+```
+
+
+
+## Other Investigations
+### Average pace by season
+Temperature was a very strong predictor in the model, so let's take a closer look at that variable.
+
+#### Data manipulation
+To get a better idea of running pace variation across seasons, we will categorize each run by the season it occurred in.
+```{r}
+runs <- runs %>% mutate(month=as.integer(format(runs$calendarDate, "%m")))
+winter <- c(12,1,2)
+spring <- c(3,4,5)
+summer <- c(6,7,8)
+fall <- c(9,10,11)
+runs <- runs %>% mutate(season=case_when(month %in% winter ~ "Winter",
+                                 month %in% spring ~ "Spring",
+                                 month %in% summer ~ "Summer",
+                                 month %in% fall ~ "Fall"),
+                        season=factor(season))
+```
+
+#### Plots
+This plot shows the distribution of pace within each season. The mean pace for each season is shown by the black dot.
+```{r, warning=FALSE}
+# define custom colors
+fall_color <- brewer.pal(n=9,name="PuOr")[2]
+winter_color <- brewer.pal(n=9,name="RdGy")[7]
+spring_color <- brewer.pal(n=9,name="RdYlGn")[8]
+summer_color <- brewer.pal(n=9,name="Spectral")[6]
+
+
+runs %>% ggplot(aes(x=season, y=average_speed_mpm)) +
+  geom_violin(trim=FALSE, aes(fill=season)) +
+  xlim(limits=c("Fall", "Winter", "Spring", "Summer")) +
+  scale_fill_manual(values=c(fall_color,spring_color,summer_color,winter_color),guide="none") +
+  stat_summary(fun="mean", geom="pointrange", color="black") +
+  labs(title="Running Pace by Season",x="Season", y="Pace (Minutes per Mile)") +
+  geom_jitter(shape=16, position=position_jitter(0.2), alpha=.3) +
+  theme_minimal()
+
+```
+
+#### ANOVA
+To find out if the mean pace differs by season, we can use an ANOVA test.
+```{r}
+season_model <- aov(runs$average_speed_mpm ~ runs$season)
+anova(season_model)
+```
+The ANOVA indicates that there are no significant differences in mean running pace across seasons. This result is interesting because temperature was such a strong predictor in the linear regression models.
+
+#### Check Assumptions
+```{r}
+qqnorm(residuals(season_model))
+```
+
+The QQ plot has several gaps in the top right area, suggesting that the population might not have a normal distribution. ANOVA requires a normally distributed population, so we can use the Kruskal-Wallis nonparametric test instead to test the same thing.
+```{r}
+kruskal.test(runs$average_speed_mpm ~ runs$season)
+```
+ There is still no evidence that running pace differs by season based on the Kruskal-Wallis test.
+ 
