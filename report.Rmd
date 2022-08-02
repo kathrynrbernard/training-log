@@ -9,17 +9,6 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-# PASTE CODE INTO HIDDEN CHUNKS
-# or use library(RCurl)
-#x <- getURL("https://raw.github.com/aronlindberg/latent_growth_classes/master/LGC_data.csv")
-#y <- read.csv(text = x)
-
-```{r, message=FALSE, include=FALSE}
-library(tidyverse)
-library(RColorBrewer)
-```
-
-
 ## Introduction
 Runners love statistics. Many runners constantly track metrics like pace, cadence, stride length, and heartrate during each run and obsess over their data afterwards in an attempt to find opportunities to improve their speed or other metrics. I am no different in this regard, and I wanted to investigate which factors are the strongest predictors of running pace based on my personal data. I analyzed data from my own runs recorded on the Strava workout tracking app and data recorded by my Garmin watch. The factors I chose to analyze are the distance of the run, average heartrate during the run, a "suffer score" calculated by the Strava app (which is one measure of perceived exertion during the activity), the ambient temperature during the run, and hours of sleep the night before the run. I found temperature to be the strongest predictor of running pace, such that I tend to run slower in hotter weather. Heartrate was also a significant predictor in the opposite direction - higher heartrate is associated with a faster run. Distance, Strava's suffer score, and sleep were not significantly associated with running pace.
 
@@ -29,7 +18,15 @@ I record all of my runs on the Strava app for iOS. Strava data was obtained by q
 I wear a Garmin Forerunner 645 watch that tracks daily biometrics, including hours of sleep. Sleep data was exported from the Garmin Connect portal.
 
 The code used to read, filter, and manipulate the Strava dataset is shown here:
+
+```{r, message=FALSE}
+library(tidyverse)
+library(RColorBrewer)
+```
+
 ```{r, warning=FALSE}
+# File on GitHub: https://github.com/kathrynrbernard/training-log/blob/main/data/strava.csv
+
 strava <- read.csv("data/strava.csv")
 
 # drop unneeded columns
@@ -69,6 +66,8 @@ runs <- runs %>% mutate(average_speed_mins=as.numeric(average_speed_mins),
 
 The code used to read, filter, and manipulate the Garmin dataset is shown here:
 ```{r, warning=FALSE}
+# Files on GitHub: https://github.com/kathrynrbernard/training-log/tree/main/data/sleep
+
 # read in data
 sleep <- read.csv("data/sleep/2021-06-23_2021-10-01_97013065_sleepData.csv")
 sleep <- rbind(sleep, read.csv("data/sleep/2021-10-01_2022-01-09_97013065_sleepData.csv"))
