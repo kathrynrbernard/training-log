@@ -1,0 +1,209 @@
+---
+title: "Investigating factors related to running speed"
+author: "Kathryn Bernard"
+date: "2022-08-02"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# PASTE CODE INTO HIDDEN CHUNKS
+# or use library(RCurl)
+#x <- getURL("https://raw.github.com/aronlindberg/latent_growth_classes/master/LGC_data.csv")
+#y <- read.csv(text = x)
+
+```{r, message=FALSE, include=FALSE}
+library(tidyverse)
+library(RColorBrewer)
+```
+
+
+## Introduction
+Runners love statistics. Many runners constantly track metrics like pace, cadence, stride length, and heartrate during each run and obsess over their data afterwards in an attempt to find opportunities to improve their speed or other metrics. I am no different in this regard, and I wanted to investigate which factors are the strongest predictors of running pace based on my personal data. I analyzed data from my own runs recorded on the Strava workout tracking app and data recorded by my Garmin watch. The factors I chose to analyze are the distance of the run, average heartrate during the run, a "suffer score" calculated by the Strava app (which is one measure of perceived exertion during the activity), the ambient temperature during the run, and hours of sleep the night before the run. I found temperature to be the strongest predictor of running pace, such that I tend to run slower in hotter weather. Heartrate was also a significant predictor in the opposite direction - higher heartrate is associated with a faster run. Distance, Strava's suffer score, and sleep were not significantly associated with running pace.
+
+## Methods
+I record all of my runs on the Strava app for iOS. Strava data was obtained by querying the Strava web API to extract my personal data. The rStrava R package was used to format the extracted data.
+
+I wear a Garmin Forerunner 645 watch that tracks daily biometrics, including hours of sleep. Sleep data was exported from the Garmin Connect portal.
+
+The code used to read, filter, and manipulate the Strava dataset is shown here:
+```{r, warning=FALSE}
+strava <- read.csv("data/strava.csv")
+
+# drop unneeded columns
+drop <- names(strava) %in% c("athlete.id", "athlete.resource_state", "commute",
+                         "display_hide_heartrate_option", "flagged", "from_accepted_tag", "has_heartrate", "has_kudoed",
+                         "heartrate_opt_out", "manual", "map.id", "map.resource_state",
+                         "photo_count", "private", "resource_state",
+                         "start_date_local", "timezone", "total_photo_count", "trainer",
+                         "utc_offset", "visibility", "average_watts", "device_watts",
+                         "end_latlng1", "end_latlng2", "external_id", "gear_id", "kilojoules",
+                         "map.summary_polyline", "start_latlng1", "start_latlng2", "upload_id", "upload_id_str",
+                         "type", "workout_type")
+strava <- strava[!drop]
+
+# filter to only running activities
+runs <- strava %>% filter(sport_type=="Run")
+
+# convert units
+runs <- runs %>% mutate(distance_miles=distance/1.609, # distance is originally in km; convert to miles
+                        temp_f=average_temp*9/5 +32, # temp is originally in C; convert to F
+                        elapsed_time_min=elapsed_time/60, # time is originally in seconds; convert to minutes
+                        moving_time_min=moving_time/60,
+                        average_speed_mpm=round(96.56064/average_speed,2), # speed is in km/hour, we want miles/min
+                        max_speed_mpm=round(96.56064/max_speed,2),
+                        total_elev_gain_ft=total_elevation_gain*3.281, # elevation is in meters, we want feet
+                        elev_high_ft=elev_high*3.281,
+                        elev_low_ft=elev_low*3.281
+                        )
+# split out minutes and hours into a more typical running pace format, for readability
+runs <- runs %>% separate(average_speed_mpm, into=c("average_speed_mins", "average_speed_secs"), remove=FALSE)
+runs <- runs %>% separate(max_speed_mpm, into=c("max_speed_mins", "max_speed_secs"), remove=FALSE)
+runs <- runs %>% mutate(average_speed_mins=as.numeric(average_speed_mins),
+                        max_speed_mins=as.numeric(max_speed_mins),
+                        max_speed_secs=as.numeric(formatC(round(as.numeric(max_speed_secs)/100*60,2),width=2,format="d",flag="0")),
+                        average_speed_secs=as.numeric(formatC(round(as.numeric(average_speed_secs)/100*60,2),width=2,format="d",flag="0")))
+```
+
+The code used to read, filter, and manipulate the Garmin dataset is shown here:
+```{r, warning=FALSE}
+# read in data
+sleep <- read.csv("data/sleep/2021-06-23_2021-10-01_97013065_sleepData.csv")
+sleep <- rbind(sleep, read.csv("data/sleep/2021-10-01_2022-01-09_97013065_sleepData.csv"))
+sleep <- rbind(sleep, read.csv("data/sleep/2022-01-09_2022-04-19_97013065_sleepData.csv"))
+sleep <- rbind(sleep, read.csv("data/sleep/2022-04-19_2022-07-28_97013065_sleepData.csv"))
+
+# drop unneeded columns
+drop <- names(sleep) %in% c("sleepWindowConfirmationType", "retro")
+sleep <- sleep[!drop]
+
+# create column for total hours of sleep
+sleep <- sleep %>% 
+  mutate(totalSleepHours=(sleep$deepSleepSeconds + sleep$lightSleepSeconds + sleep$remSleepSeconds + sleep$unmeasurableSeconds)/60/60)
+```
+
+The sleep data was joined to the Strava dataset to create the full dataset used in analysis.
+```{r, warning=FALSE}
+runs$calendarDate <- as.Date(runs$start_date) # get just the date (not time) of the run
+sleep$calendarDate <- as.Date(sleep$calendarDate) # convert to Date datatype
+
+# join sleep data to run dataframe
+runs <- runs %>% left_join(sleep, by="calendarDate")
+```
+
+
+The distributions of each variable of interest are shown below.
+```{r, warning=FALSE, message=FALSE}
+var_names <- c(`average_heartrate` = c(paste("Heartrate\nMean: ", round(mean(runs$average_heartrate,na.rm=TRUE),2))),
+               `distance_miles` = c(paste("Distance (Miles)\nMean: ", round(mean(runs$distance_miles,na.rm=TRUE),2))), 
+               `suffer_score` = c(paste("Suffer Score\nMean: ", round(mean(runs$suffer_score,na.rm=TRUE),2))),
+               `temp_f` = c(paste("Temperature (F)\nMean: ", round(mean(runs$temp_f,na.rm=TRUE),2))),
+               `totalSleepHours` = c(paste("Previous Night's Sleep (Hours)\nMean: ", round(mean(runs$totalSleepHours,na.rm=TRUE),2))))
+
+runs %>% 
+  select(c("average_speed_mpm","distance_miles", "suffer_score", "average_heartrate", "temp_f", "totalSleepHours")) %>% 
+  pivot_longer(!average_speed_mpm,names_to="Variable",values_to="Value") %>% 
+  ggplot(aes(x=Value,fill=Variable)) + 
+  geom_histogram() +
+  scale_fill_manual(values=brewer.pal(n=5,name="Set1")) +
+  facet_wrap(~Variable, scales="free", labeller = as_labeller(var_names)) +
+  labs(title="Distribution of Each Model Factor", y="Count") +
+  theme_minimal() +
+  theme(legend.position="none")
+```
+
+
+## Results
+Overall, I found that temperature and heartrate were significant predictors of running pace, while distance, suffer score, and sleep were not significant predictors. These findings were not completely in line with my initial hypothesis. I initially hypothesized that sleep would be a more significant factor than some of the other variables.
+
+I constructed a multiple linear regression model predicting pace. The full model included distance, heartrate, suffer score, temperature, and sleep. Cook's distance was used to identify and remove influential outliers from the dataset. A likelihood ratio test was conducted between the full model and two subsequent models (one with temperature removed and one with sleep removed) to evaluate the significance of the predictors. The model without sleep resulted in the lowest AIC and was therefore selected as the final model.
+
+```{r, warning=FALSE, message=FALSE}
+# construct final model
+model_all <- lm(average_speed_mpm ~ distance_miles + suffer_score + average_heartrate + temp_f, data=runs)
+summary(model_all)
+
+# find influential points
+cooksd <- cooks.distance(model_all)
+influential <- as.numeric(names(cooksd)[(cooksd > 4/nrow(runs))])
+
+# remove the points above the cooks d cutoff
+runs <- runs[-influential,]
+
+# re-run the model
+model_all <- lm(average_speed_mpm ~ distance_miles + suffer_score + average_heartrate + temp_f, data=runs)
+summary(model_all)
+
+# create nicer titles for the facets on the plot
+var_names <- c(`average_heartrate` = "Heartrate",
+               `distance_miles` = "Distance (Miles)", 
+               `suffer_score` = "Suffer Score",
+               `temp_f` = "Temperature (F)")
+
+# plot each variable's relationship with pace
+runs %>% 
+  select(c("average_speed_mpm","distance_miles", "suffer_score", "average_heartrate", "temp_f")) %>% 
+  pivot_longer(!average_speed_mpm,names_to="Variable",values_to="Value") %>% 
+  ggplot(aes(x=Value,y=average_speed_mpm,color=Variable)) + 
+  geom_jitter(alpha=.5) +
+  geom_smooth(aes(fill=Variable), alpha=.2, method=lm) +
+  scale_color_manual(values=brewer.pal(n=4,name="Set1")) +
+  scale_fill_manual(values=brewer.pal(n=4,name="Set1")) +
+  facet_wrap(~Variable, scales="free_x", labeller = as_labeller(var_names)) +
+  labs(title="Relationship of Each Model Factor with Running Pace", y="Pace (Miles per Minute)") +
+  theme_minimal() +
+  theme(legend.position="none")
+```
+
+To further investigate the relationship of temperature and pace, each run was categorized by the season it occurred in and mean pace was compared across seasons. December, January, and February were considered winter; March, April, and May were considered spring; June, July, and August were considered summer; and September, October, and November were considered fall.
+
+```{r}
+# separate the month of each run from the full date
+runs <- runs %>% mutate(month=as.integer(format(runs$calendarDate, "%m")))
+
+# categorize months into seasons
+winter <- c(12,1,2)
+spring <- c(3,4,5)
+summer <- c(6,7,8)
+fall <- c(9,10,11)
+
+# assign each run to a season
+runs <- runs %>% mutate(season=case_when(month %in% winter ~ "Winter",
+                                 month %in% spring ~ "Spring",
+                                 month %in% summer ~ "Summer",
+                                 month %in% fall ~ "Fall"),
+                        season=factor(season))
+
+# define color for each season
+fall_color <- brewer.pal(n=9,name="PuOr")[2]
+winter_color <- brewer.pal(n=9,name="RdGy")[7]
+spring_color <- brewer.pal(n=9,name="RdYlGn")[8]
+summer_color <- brewer.pal(n=9,name="Spectral")[6]
+
+# plot by season
+runs %>% ggplot(aes(x=season, y=average_speed_mpm)) +
+  geom_violin(trim=FALSE, aes(fill=season)) +
+  xlim(limits=c("Fall", "Winter", "Spring", "Summer")) +
+  scale_fill_manual(values=c(fall_color,spring_color,summer_color,winter_color),guide="none") +
+  stat_summary(fun="mean", geom="pointrange", color="black") +
+  labs(title="Running Pace by Season",x="Season", y="Pace (Minutes per Mile)") +
+  geom_jitter(shape=16, position=position_jitter(0.2), alpha=.3) +
+  theme_minimal()
+
+```
+
+A Kruskal-Wallis test by rank was conducted as a non-parametric alternative to ANOVA, because the data violated ANOVA's assumptions of normality. The Kruskal-Wallis test revealed no significant differences in mean pace across seasons, a surprising result in light of temperature's strong influence in the linear regression model.
+
+```{r}
+kruskal.test(runs$average_speed_mpm ~ runs$season)
+```
+
+The analysis was conducted in R version 4.2.0 (2022-04-22).
+
+## Conclusion
+The goal of this project was to investigate factors associated with running pace. I found that temperature and heartrate have a significant affect on pace. Higher temperatures are associated with slower runs, and higher heartrates are associated with faster runs. Distance, perceived exertion, and sleep, were not significant predictors.
+
+Because the data analyzed was collected from only one individual, the results of this analysis cannot be generalized to the entire population of runners. Future work could include analyzing data from a random sample of all public profiles on Strava (though likely excluding professional runners) in order to be able to generalize these findings to other individuals. Future work could also include incorporating additional biometric data collected by the Garmin watch, such as stress levels and heartrate over the entire day (the current analysis only included average heartrate during the run as a factor in the model). 
+
